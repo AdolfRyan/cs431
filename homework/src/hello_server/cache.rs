@@ -9,13 +9,13 @@ use std::sync::{Arc, Mutex, RwLock};
 pub struct Cache<K, V> {
     // todo! This is an example cache type. Build your own cache type that satisfies the
     // specification for `get_or_insert_with`.
-    inner: Mutex<HashMap<K, V>>,
+    inner: RwLock<HashMap<K, Arc<Mutex<Option<V>>>>>,
 }
 
 impl<K, V> Default for Cache<K, V> {
     fn default() -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -36,6 +36,42 @@ impl<K: Eq + Hash + Clone, V: Clone> Cache<K, V> {
     ///
     /// [`Entry`]: https://doc.rust-lang.org/stable/std/collections/hash_map/struct.HashMap.html#method.entry
     pub fn get_or_insert_with<F: FnOnce(K) -> V>(&self, key: K, f: F) -> V {
-        todo!()
+        loop {
+            {
+                let inner_read = self.inner.read().unwrap();
+                if let Some(value) = inner_read.get(&key) {
+                    let value = value.lock().unwrap();
+                    if let Some(ref value) = *value {
+                        return value.clone();
+                    }
+                    continue;
+                }
+            }
+
+            let value_arc = {
+                let mut inner_write = self.inner.write().unwrap();
+                match inner_write.entry(key.clone()) {
+                    Entry::Occupied(entry) => {
+                        entry.get().clone()
+                    }
+                    Entry::Vacant(entry) => {
+                        let value_arc = Arc::new(Mutex::new(None));
+                        entry.insert(Arc::clone(&value_arc));
+                        value_arc
+                    }
+                }
+            };
+
+            if let Some(ref value) = *value_arc.lock().unwrap() {
+                return value.clone();
+            }
+
+            let new_value = f(key.clone());
+            let mut value = value_arc.lock().unwrap();
+            *value = Some(new_value.clone());
+            return new_value;
+
+        }
     }
+
 }
